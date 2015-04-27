@@ -1,0 +1,70 @@
+---
+
+vpc_subnets:
+  public:
+    - cidr: 10.1.0.0/24
+      az: "{{ vpc.region }}c"
+      resource_tags:
+        Name: "{{ vpc.environment }} public subnet"
+        zone: "public"
+    - cidr: 10.1.1.0/24
+      az: "{{ vpc.region }}d"
+      resource_tags:
+        Name: "{{ vpc.environment }} public subnet"
+        zone: "public"
+    - cidr: 10.1.2.0/24
+      az: "{{ vpc.region }}e"
+      resource_tags:
+        name: "{{ vpc.environment }} public subnet"
+        zone: "public"
+  private:
+    - cidr: 10.1.80.0/24
+      az: "{{ vpc.region }}c"
+      resource_tags:
+        Name: "{{ vpc.environment }} private subnet"
+        zone: "private"
+    - cidr: 10.1.81.0/24
+      az: "{{ vpc.region }}d"
+      resource_tags:
+        Name: "{{ vpc.environment }} private subnet"
+        zone: "private"
+    - cidr: 10.1.82.0/24
+      az: "{{ vpc.region }}e"
+      resource_tags:
+        Name: "{{ vpc.environment }} private subnet"
+        zone: "private"
+
+vpc:
+  environment: development
+  region: us-east-1
+  cdir: 10.1.0.0/16
+  aws_key:
+
+vpc_facts_file:   "{{ lookup('env','HOME') }}/.ansible/{{ vpc.region }}-{{ vpc.environment }}.json"
+vpc_subnets_file: "{{ lookup('env','HOME') }}/.ansible/{{ vpc.region }}-{{ vpc.environment }}-subnets.json"
+
+rules:
+  web:
+    - proto:      tcp
+      from_port:  80
+      to_port:    80
+      cidr_ip:    0.0.0.0/0
+    - proto:      tcp
+      from_port:  443
+      to_port:    443
+      cidr_ip:    0.0.0.0/0
+
+services:
+  - name: service01
+    id: ami-cc3b3ea4
+    min: 2
+    max: 2
+    version: v1
+    rules: "{{ rules.web }}"
+  - name: service02
+    id: ami-cc3b3ea4
+    min: 1
+    max: 1
+    version: v1
+    rules: "{{ rules.web }}"
+

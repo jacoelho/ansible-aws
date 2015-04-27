@@ -1,0 +1,96 @@
+---
+
+- include: aws_facts.yml
+  get_facts: True
+
+- name: create load balancer security group
+  ec2_group:
+    name: "{{ item.name }}-{{ vpc.environment }}"
+    vpc_id: "{{ vpc_fact.vpc_id }}"
+    region: "{{ vpc.region }}"
+    description: "{{ item.name }}-{{ vpc.environment }}"
+    rules: "{{ item.rules }}"
+  register: sg_group
+  with_items: services
+
+- name: create elastic load balancer
+  ec2_elb_lb:
+    name: "{{ item.0.name }}-{{ vpc.environment }}"
+    state: present
+    connection_draining_timeout: 60
+    cross_az_load_balancing: yes
+    region: "{{ vpc.region }}"
+    subnets: "{{ subnets_fact.public }}"
+    security_group_ids: "{{ item.1.group_id }}"
+    listeners:
+      - protocol: http
+        load_balancer_port: 80
+        instance_port: 80
+  register: new_elb
+  with_together:
+    - services
+    - sg_group.results
+
+- name: create instance security group
+  ec2_group:
+    name: "{{ item.name }}-{{ vpc.environment }}"
+    vpc_id: "{{ vpc_fact.vpc_id }}"
+    region: "{{ vpc.region }}"
+    description: "{{ item.name }}-{{ vpc.environment }}"
+    rules: "{{ item.rules }}"
+    rules_egress:
+      - proto:      tcp
+        from_port:  80
+        to_port:    80
+        cidr_ip:    "0.0.0.0/0"
+      - proto:      tcp
+        from_port:  443
+        to_port:    443
+        cidr_ip:    "0.0.0.0/0"
+  register: sg_group
+  with_items: services
+
+- name: create launch config
+  ec2_lc:
+    name:                "{{ item.0.name }}{{ item.0.version }}-{{ vpc.environment }}"
+    image_id:            "{{ item.0.id }}"
+    instance_type:       t2.micro
+    key_name:            "{{ vpc.aws_key }}"
+    region:              "{{ vpc.region }}"
+    security_groups:     "{{ item.1.group_id }}"
+    user_data: |
+      #!/bin/bash
+
+      sudo apt-get install -y apache2
+
+      SERVICE="{{ item.0.name }}"
+      VERSION_ID="{{ item.0.version }}"
+      INSTANCE_ID=$(cat /var/lib/cloud/data/instance-id)
+
+      echo "Hello world" | sudo tee /var/www/html/index.html
+      echo "Service: ${SERVICE}" | sudo tee -a /var/www/html/index.html
+      echo "Instance ID: ${INSTANCE_ID}" | sudo tee -a /var/www/html/index.html
+      echo "Version ID: ${VERSION_ID}" | sudo tee -a /var/www/html/index.html
+  with_together:
+    - services
+    - sg_group.results
+
+- ec2_asg:
+    name: "{{ item.0.name }}{{ item.0.version }}-{{ vpc.environment }}"
+    load_balancers: "{{ item.1.elb.name }}"
+    vpc_zone_identifier:  "{{ subnets_fact.private | join(',') }}"
+    launch_config_name: "{{ item.0.name }}{{ item.0.version }}-{{ vpc.environment }}"
+    health_check_period: 600
+    health_check_type: ELB
+    replace_all_instances: yes
+    min_size: "{{ item.0.min }}"
+    max_size: "{{ item.0.max }}"
+    desired_capacity: "{{ item.0.min }}"
+    region: "{{ vpc.region }}"
+    tags:
+      - Name: "{{ item.0.name }}"
+      - environment: "{{ vpc.environment }}"
+      - version: "{{ item.0.version }}"
+  with_together:
+    - services
+    - new_elb.results

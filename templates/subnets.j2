@@ -1,0 +1,5 @@
+{% set subnets = new_vpc.subnets %}
+{ {% for subnet in subnets | groupby('resource_tags.zone') %}
+"{{ subnet.0 }}": {{ subnet.1 | map(attribute='id') | list | to_json }}{% if not loop.last %},{% endif %}
+{% endfor %}
+}

@@ -1,0 +1,9 @@
+---
+
+- hosts: localhost
+  gather_facts: no
+  connection: local
+
+  tasks:
+    - include: aws_vpc.yml
+    - include: aws_stack.yml

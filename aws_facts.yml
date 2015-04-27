@@ -1,0 +1,33 @@
+---
+
+- name: check for files
+  stat:
+    path: "{{ item }}"
+  with_items:
+    - "{{ vpc_facts_file }}"
+    - "{{ vpc_subnets_file }}"
+  register: local_facts
+
+- assert:
+    that:
+      - "{{ item.stat.exists }}"
+  with_items: local_facts.results
+
+
+- name: save vpc information
+  template:
+    dest:  "{{ vpc_facts_file }}"
+    src:   templates/facts.j2
+  when: set_facts is defined and set_facts
+
+- name: save vpc subnet information
+  template:
+    dest:  "{{ vpc_subnets_file }}"
+    src:   templates/subnets.j2
+  when: set_facts is defined and set_facts
+
+- name: get vpc facts
+  set_fact:
+    vpc_fact:     "{{ lookup('file', vpc_facts_file)   | from_json }}"
+    subnets_fact: "{{ lookup('file', vpc_subnets_file) | from_json }}"
+  when: get_facts is defined and get_facts

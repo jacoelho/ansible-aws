@@ -1,0 +1,119 @@
+---
+
+- name: create vpc
+  ec2_vpc:
+    state: present
+    cidr_block: "{{ vpc.cdir }}"
+    subnets: "{{ vpc_subnets.public + vpc_subnets.private }}"
+    internet_gateway:  true
+    region: "{{ vpc.region }}"
+    wait: yes
+    resource_tags:
+      Name: "{{ vpc.environment }}"
+  register: new_vpc
+
+- include: aws_facts.yml
+  set_facts: True
+  get_facts: True
+
+- name: get the Ubuntu trusty ami
+  ec2_ami_search:
+    distro:   ubuntu
+    release:  trusty
+    region:   "{{ vpc.region }}"
+    store:    ebs-ssd
+    virt:     hvm
+  register: ubuntu_image
+
+- name: create nat instance acl
+  ec2_group:
+    name:         nat security group
+    vpc_id:       "{{ vpc_fact.vpc_id }}"
+    region:       "{{ vpc.region }}"
+    purge_rules:  false
+    description:  nat security group
+    rules:
+      - proto:      tcp
+        from_port:  22
+        to_port:    22
+        cidr_ip:    "0.0.0.0/0"
+      - proto:      tcp
+        from_port:  80
+        to_port:    80
+        cidr_ip:    "{{ item }}"
+      - proto:      tcp
+        from_port:  443
+        to_port:    443
+        cidr_ip:    "{{ item }}"
+    rules_egress:
+      - proto:      tcp
+        from_port:  22
+        to_port:    22
+        cidr_ip:    "{{ vpc.cdir }}"
+      - proto:      tcp
+        from_port:  80
+        to_port:    80
+        cidr_ip:    "0.0.0.0/0"
+      - proto:      tcp
+        from_port:  443
+        to_port:    443
+        cidr_ip:    "0.0.0.0/0"
+  with_items: "{{ vpc_subnets.private | map(attribute='cidr') | list }}"
+
+- name: create the NAT Instance
+  ec2:
+    region:             "{{ vpc.region }}"
+    key_name:           "{{ vpc.aws_key }}"
+    instance_type:      "t2.micro"
+    image:              "{{ ubuntu_image.ami }}"
+    vpc_subnet_id:      "{{ subnets_fact['public'][0] }}"
+    source_dest_check:  false
+    group:              "nat security group"
+    user_data: |
+      #!/bin/bash
+      echo 1 > /proc/sys/net/ipv4/ip_forward
+      echo 0 > /proc/sys/net/ipv4/conf/eth0/send_redirects
+      /sbin/iptables -t nat -A POSTROUTING -o eth0 -s 0.0.0.0/0 -j MASQUERADE
+      /sbin/iptables-save > /etc/iptables.rules
+      mkdir -p /etc/sysctl.d/
+      cat <<EOF > /etc/sysctl.d/60-nat.conf
+      net.ipv4.ip_forward = 1
+      net.ipv4.conf.eth0.send_redirects = 0
+      EOF
+    wait: yes
+    instance_tags:
+      Name: "{{ vpc.environment + '_nat_instance' }}"
+      role: "nat"
+    exact_count: 1
+    count_tag:
+      role: "nat"
+  when: ubuntu_image is defined and vpc_fact is defined
+  register: nat_machine
+
+- name: associate an elastic ip
+  ec2_eip:
+    in_vpc:       yes
+    region:       "{{ vpc.region }}"
+    instance_id:  "{{ nat_machine.instance_ids.0 }}"
+  when: nat_machine | changed
+
+- name: create vpc routes
+  ec2_vpc:
+    state: present
+    cidr_block: "{{ vpc.cdir }}"
+    resource_tags:
+      Name: "{{ vpc.environment }}"
+    route_tables:
+      - subnets: "{{ vpc_subnets.public | map(attribute='cidr') | list }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gw: igw
+      - subnets: "{{ vpc_subnets.private | map(attribute='cidr') | list }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gw: "{{ nat_machine.instance_ids.0 }}"
+    internet_gateway: true
+    region: "{{ vpc.region }}"
+    wait: yes
+  when: nat_machine | changed
+
